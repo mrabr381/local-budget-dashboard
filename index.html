@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Budget Dashboard — See where your money went</title>
+<meta name="description" content="Free local-first budget dashboard. Drop in a bank CSV, see spending charts, budgets and money left this month. Your bank file never leaves your computer.">
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --line:#2a2e38; --text:#f2f3f5; --muted:#9aa3b2; --amber:#f5a623; --green:#34c77b; --red:#e5484d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header, main { max-width:960px; margin:0 auto; padding:0 16px; }
+  header { padding:32px 16px 8px; }
+  h1 { margin:0 0 8px; font-size:1.9rem; }
+  h1 span { color:var(--amber); }
+  .pitch { color:var(--muted); margin:0 0 20px; font-size:1.05rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:16px 0; }
+  #drop { border:2px dashed var(--line); border-radius:12px; padding:28px 16px; text-align:center; color:var(--muted); cursor:pointer; }
+  #drop.over { border-color:var(--amber); color:var(--text); }
+  button { background:var(--amber); color:#111; border:0; border-radius:8px; padding:10px 18px; font-weight:700; cursor:pointer; font-size:1rem; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:center; margin-top:14px; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+  .stat b { display:block; font-size:1.7rem; margin-top:4px; }
+  .stat small { color:var(--muted); text-transform:uppercase; letter-spacing:.05em; font-size:.75rem; }
+  .stat .left { color:var(--green); } .stat .neg { color:var(--red); }
+  select, input[type=file] { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; }
+  table { width:100%; border-collapse:collapse; font-size:.95rem; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.05em; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .bar { height:8px; background:#2a2e38; border-radius:4px; overflow:hidden; min-width:120px; }
+  .bar i { display:block; height:100%; background:var(--green); }
+  .bar i.over { background:var(--red); }
+  .over-tag { color:var(--red); font-weight:700; }
+  .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+  .charts canvas { max-height:300px; }
+  .muted { color:var(--muted); font-size:.9rem; }
+  .hidden { display:none; }
+  footer { max-width:960px; margin:0 auto; padding:8px 16px 40px; color:var(--muted); font-size:.85rem; }
+  a { color:var(--amber); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Local Budget <span>Dashboard</span></h1>
+  <p class="pitch">See where your money went this month — your bank file never leaves your computer.</p>
+</header>
+<main>
+  <div class="card">
+    <div id="drop" tabindex="0" role="button" aria-label="Drop a bank CSV file here">
+      <strong>Drop your bank CSV here</strong><br>
+      or choose a file — parsed entirely in your browser, nothing is uploaded.
+      <div class="row">
+        <label class="ghost" style="padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:700">Choose CSV file
+          <input id="file" type="file" accept=".csv,text/csv" style="display:none">
+        </label>
+        <button id="sample" type="button">Try sample data</button>
+      </div>
+      <p class="muted" style="margin:12px 0 0">Works with most bank exports: columns named Date, Description and Amount (also Debit/Credit pairs). Amounts can be £1,234.56, -45.00 or (45.00).</p>
+    </div>
+    <p id="status" class="muted" role="status"></p>
+  </div>
+
+  <section id="results" class="hidden" aria-live="polite">
+    <div class="card">
+      <label for="month">Month
+        <select id="month"></select>
+      </label>
+      <div class="stats" style="margin-top:16px">
+        <div class="stat"><small>Money in</small><b id="income">–</b></div>
+        <div class="stat"><small>Money out</small><b id="spending">–</b></div>
+        <div class="stat"><small>Money left this month</small><b id="left" class="left">–</b></div>
+        <div class="stat"><small>Transactions</small><b id="count">–</b></div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="card"><h2 style="margin-top:0;font-size:1.1rem">Spending by category</h2><canvas id="pie"></canvas></div>
+      <div class="card"><h2 style="margin-top:0;font-size:1.1rem">Budget vs spent</h2><canvas id="bars"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;font-size:1.1rem">Budgets</h2>
+      <p class="muted">Default monthly budgets — edit any number and the remaining column updates instantly.</p>
+      <table>
+        <thead><tr><th>Category</th><th class="num">Budget</th><th class="num">Spent</th><th class="num">Remaining</th><th>Used</th></tr></thead>
+        <tbody id="budgets"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;font-size:1.1rem">Transactions</h2>
+      <table>
+        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="num">Amount</th></tr></thead>
+        <tbody id="txns"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<footer>
+  <p><strong>Privacy:</strong> everything runs in your browser. No account, no server, no bank sync — your CSV is never sent anywhere. That is the trade-off: no automatic sync, you export and drop in your statement yourself.</p>
+  <p>Local Budget Dashboard — free, open source. <a href="https://github.com/mrabr381/local-budget-dashboard">Source on GitHub</a></p>
+  <p style="display:flex;gap:16px;align-items:center;flex-wrap:wrap"><a href="https://github.com/mrabr381/local-budget-dashboard" target="_blank" rel="noopener">⭐ Star on GitHub</a> <a href="https://www.buymeacoffee.com/muhammadabubakar" target="_blank" rel="noopener"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="40"></a></p>
+</footer>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="js/budget.js"></script>
+<script src="js/sample-data.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const fmt = n => '£' + n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const L = window.BudgetLogic;
+  let allRows = [];
+  let budgets = Object.assign({}, L.DEFAULT_BUDGETS);
+  let pieChart = null, barChart = null;
+  const COLORS = ['#f5a623','#4f8ef7','#34c77b','#e5484d','#9b7ede','#2ec4b6','#f77f00','#e0aaff','#8ac926','#6c757d'];
+
+  function monthsOf(rows) {
+    const set = [...new Set(rows.map(r => r.date && r.date.slice(0, 7)).filter(Boolean))].sort().reverse();
+    return set;
+  }
+
+  function render() {
+    const ym = $('month').value;
+    const rows = L.filterByMonth(allRows, ym);
+    const s = L.computeSummary(rows);
+    $('income').textContent = fmt(s.income);
+    $('spending').textContent = fmt(s.spending);
+    const leftEl = $('left');
+    leftEl.textContent = fmt(s.moneyLeft);
+    leftEl.className = s.moneyLeft < 0 ? 'neg' : 'left';
+    $('count').textContent = String(s.count);
+    $('status').textContent = s.count + ' transactions loaded' + (ym ? ' for ' + ym : '') + '.';
+
+    // Budgets table
+    const status = L.budgetStatus(s.byCategory, budgets);
+    $('budgets').innerHTML = status.map(b => {
+      const pct = b.budget > 0 ? Math.min(100, Math.round(b.spent / b.budget * 100)) : 0;
+      return '<tr><td>' + b.category + '</td>'
+        + '<td class="num"><input type="number" min="0" step="1" value="' + b.budget + '" data-cat="' + b.category + '" style="width:80px;text-align:right" aria-label="Budget for ' + b.category + '"></td>'
+        + '<td class="num">' + fmt(b.spent) + '</td>'
+        + '<td class="num' + (b.over ? ' over-tag' : '') + '">' + fmt(b.remaining) + (b.over ? ' over' : '') + '</td>'
+        + '<td><div class="bar"><i class="' + (b.over ? 'over' : '') + '" style="width:' + pct + '%"></i></div></td></tr>';
+    }).join('');
+    $('budgets').querySelectorAll('input').forEach(inp => inp.addEventListener('change', () => {
+      budgets[inp.dataset.cat] = Math.max(0, parseFloat(inp.value) || 0);
+      render();
+    }));
+
+    // Transactions table
+    $('txns').innerHTML = rows.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .map(r => '<tr><td>' + (r.date || '—') + '</td><td>' + escapeHtml(r.description) + '</td><td>' + r.category + '</td><td class="num">' + fmt(r.amount) + '</td></tr>').join('');
+
+    // Charts
+    if (window.Chart) {
+      const cats = Object.keys(s.byCategory).sort((a, b) => s.byCategory[b] - s.byCategory[a]);
+      const vals = cats.map(c => s.byCategory[c]);
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart($('pie'), { type: 'doughnut',
+        data: { labels: cats, datasets: [{ data: vals, backgroundColor: COLORS }] },
+        options: { plugins: { legend: { position: 'bottom', labels: { color: '#f2f3f5' } } } } });
+      const top = status.filter(b => b.spent > 0 || b.budget > 0).slice(0, 8);
+      if (barChart) barChart.destroy();
+      barChart = new Chart($('bars'), { type: 'bar',
+        data: { labels: top.map(b => b.category),
+          datasets: [
+            { label: 'Budget', data: top.map(b => b.budget), backgroundColor: '#2a2e38' },
+            { label: 'Spent', data: top.map(b => b.spent), backgroundColor: '#f5a623' } ] },
+        options: { indexAxis: 'y', plugins: { legend: { labels: { color: '#f2f3f5' } } },
+          scales: { x: { ticks: { color: '#9aa3b2' } }, y: { ticks: { color: '#f2f3f5' } } } } });
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function load(text, label) {
+    const rows = L.parseCSV(text);
+    if (!rows.length) { $('status').textContent = 'No transactions found in that file. Check it has Date, Description and Amount columns.'; return; }
+    allRows = rows;
+    budgets = Object.assign({}, L.DEFAULT_BUDGETS);
+    const months = monthsOf(rows);
+    $('month').innerHTML = months.map(m => '<option value="' + m + '">' + m + '</option>').join('');
+    $('month').value = months[0];
+    $('results').classList.remove('hidden');
+    $('status').textContent = rows.length + ' transactions loaded from ' + label + '.';
+    render();
+  }
+
+  $('sample').addEventListener('click', () => load(window.SAMPLE_CSV, 'sample data'));
+  $('month').addEventListener('change', render);
+  $('file').addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (f) f.text().then(t => load(t, f.name));
+  });
+  const drop = $('drop');
+  drop.addEventListener('click', e => { if (e.target === drop) $('file').click(); });
+  drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+  ['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => {
+    const f = e.dataTransfer.files[0];
+    if (f) f.text().then(t => load(t, f.name));
+  });
+})();
+</script>
+</body>
+</html>
